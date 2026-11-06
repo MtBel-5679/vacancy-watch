@@ -47,3 +47,54 @@ def notify(title, message):
         headers={"Content-Type": "application/json"}, method="POST",
     )
     urllib.request.urlopen(req, timeout=20).read()
+
+
+def fetch():
+    q = urllib.parse.urlencode({
+        "year": TARGET_YEAR, "month": TARGET_MONTH, "planType": 1,
+    })
+    req = urllib.request.Request(f"{API}?{q}", headers=HEADERS)
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def find_cell(data):
+    """12月のカレンダーから対象日のセル(HTML文字列)を探す"""
+    caption_key = f"{TARGET_MONTH}月"
+    for i in range(6):
+        block = data.get(str(i)) if isinstance(data, dict) else data[i]
+        if not block:
+            continue
+        if caption_key not in block.get("calendarCaption", ""):
+            continue
+        for row in block["data"]:
+            for cell in row.values():
+                if not isinstance(cell, str):
+                    continue
+                text = re.sub(r"<[^>]*>", " ", cell)
+                m = re.search(r"\d+", text)
+                if m and int(m.group()) == TARGET_DAY:
+                    return cell
+    return None
+
+
+def main():
+    data = fetch()
+    cell = find_cell(data)
+    if cell is None:
+        print("対象日のセルが見つかりません。サイト構造が変わった可能性があります。")
+        print(json.dumps(data, ensure_ascii=False)[:2000])
+        sys.exit(1)
+
+    label = next((name for cls, name in STATUS if cls in cell), "不明")
+    print(f"{TARGET_MONTH}/{TARGET_DAY}: {label}\n{cell}")
+
+    if "fa-xmark" not in cell:
+        notify(
+            f"{TARGET_MONTH}/{TARGET_DAY} 空きが出ました",
+            f"西村屋本館 {TARGET_MONTH}/{TARGET_DAY} の状態: {label}",
+        )
+
+
+if __name__ == "__main__":
+    main()
