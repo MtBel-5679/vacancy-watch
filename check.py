@@ -41,3 +41,9 @@ def notify(title, message):
         "click": PAGE,
         "priority": 4,
         "tags": ["tada"],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://ntfy.sh", data=body,
+        headers={"Content-Type": "application/json"}, method="POST",
+    )
+    urllib.request.urlopen(req, timeout=20).read()
