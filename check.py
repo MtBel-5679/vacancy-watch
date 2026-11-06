@@ -89,7 +89,7 @@ def main():
     label = next((name for cls, name in STATUS if cls in cell), "不明")
     print(f"{TARGET_MONTH}/{TARGET_DAY}: {label}\n{cell}")
 
-    if "fa-xmark" not in cell:
+    if "fa-xmark" in cell:
         notify(
             f"{TARGET_MONTH}/{TARGET_DAY} 空きが出ました",
             f"西村屋本館 {TARGET_MONTH}/{TARGET_DAY} の状態: {label}",
