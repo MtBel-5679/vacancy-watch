@@ -5,21 +5,16 @@ import sys
 import urllib.parse
 import urllib.request
 
-# ===== 設定 =====
-TARGET_YEAR = 2026
-TARGET_MONTH = 12
-TARGET_DAY = 6
-API = "https://reserve.489ban.net/client/honkan/0/plan/availability/dailycalendar"
-PAGE = "https://reserve.489ban.net/client/honkan/0/plan/availability/daily#content"
-NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
-# =================
+# ===== 監視対象（増やしたいときは1行追加）=====
+# (表示名, サイトのスラッグ, 年, 月, 日)
+TARGETS = [
+    ("西村屋本館", "honkan", 2026, 12, 6),
+    ("精進マウントホテル", "shojiko", 2026, 12, 31),
+]
+# ===============================================
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (vacancy-watch personal use)",
-    "Accept": "application/json, text/javascript, */*; q=0.01",
-    "X-Requested-With": "XMLHttpRequest",
-    "Referer": PAGE,
-}
+NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+BASE = "https://reserve.489ban.net/client/{slug}/0/plan/availability/"
 
 STATUS = [
     ("fa-xmark", "満室(×)"),
@@ -30,7 +25,7 @@ STATUS = [
 ]
 
 
-def notify(title, message):
+def notify(title, message, click):
     if not NTFY_TOPIC:
         print("NTFY_TOPIC未設定のため通知スキップ:", title, message)
         return
@@ -38,7 +33,7 @@ def notify(title, message):
         "topic": NTFY_TOPIC,
         "title": title,
         "message": message,
-        "click": PAGE,
+        "click": click,
         "priority": 4,
         "tags": ["tada"],
     }).encode("utf-8")
@@ -49,51 +44,82 @@ def notify(title, message):
     urllib.request.urlopen(req, timeout=20).read()
 
 
-def fetch():
-    q = urllib.parse.urlencode({
-        "year": TARGET_YEAR, "month": TARGET_MONTH, "planType": 1,
-    })
-    req = urllib.request.Request(f"{API}?{q}", headers=HEADERS)
+def fetch(slug, year, month):
+    q = urllib.parse.urlencode({"year": year, "month": month, "planType": 1})
+    page = BASE.format(slug=slug) + "daily#content"
+    req = urllib.request.Request(
+        BASE.format(slug=slug) + "dailycalendar?" + q,
+        headers={
+            "User-Agent": "Mozilla/5.0 (vacancy-watch personal use)",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "X-Requested-With": "XMLHttpRequest",
+            "Referer": page,
+        },
+    )
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode("utf-8"))
 
 
-def find_cell(data):
-    """12月のカレンダーから対象日のセル(HTML文字列)を探す"""
-    caption_key = f"{TARGET_MONTH}月"
-    for i in range(6):
-        block = data.get(str(i)) if isinstance(data, dict) else data[i]
-        if not block:
-            continue
-        if caption_key not in block.get("calendarCaption", ""):
+def find_cell(data, year, month, day):
+    """対象日のセル(HTML文字列)を探す。まず日付クラス、だめなら月の表題+日番号"""
+    blocks = []
+    if isinstance(data, dict):
+        blocks = [v for v in data.values() if isinstance(v, dict) and "data" in v]
+    elif isinstance(data, list):
+        blocks = [v for v in data if isinstance(v, dict) and "data" in v]
+
+    date_class = 'class="%04d-%02d-%02d"' % (year, month, day)
+    for block in blocks:
+        for row in block["data"]:
+            for cell in row.values():
+                if isinstance(cell, str) and date_class in cell:
+                    return cell
+
+    for block in blocks:
+        m = re.search(r"(\d{4})\D+(\d{1,2})月", block.get("calendarCaption", ""))
+        if not m or (int(m.group(1)), int(m.group(2))) != (year, month):
             continue
         for row in block["data"]:
             for cell in row.values():
                 if not isinstance(cell, str):
                     continue
                 text = re.sub(r"<[^>]*>", " ", cell)
-                m = re.search(r"\d+", text)
-                if m and int(m.group()) == TARGET_DAY:
+                n = re.search(r"\d+", text)
+                if n and int(n.group()) == day:
                     return cell
     return None
 
 
-def main():
-    data = fetch()
-    cell = find_cell(data)
+def check(name, slug, year, month, day):
+    data = fetch(slug, year, month)
+    cell = find_cell(data, year, month, day)
     if cell is None:
-        print("対象日のセルが見つかりません。サイト構造が変わった可能性があります。")
-        print(json.dumps(data, ensure_ascii=False)[:2000])
-        sys.exit(1)
+        print(f"[{name}] 対象日のセルが見つかりません")
+        print(json.dumps(data, ensure_ascii=False)[:1500])
+        return False
 
-    label = next((name for cls, name in STATUS if cls in cell), "不明")
-    print(f"{TARGET_MONTH}/{TARGET_DAY}: {label}\n{cell}")
+    label = next((n for cls, n in STATUS if cls in cell), "不明")
+    print(f"[{name}] {month}/{day}: {label}")
 
     if "fa-xmark" not in cell:
         notify(
-            f"{TARGET_MONTH}/{TARGET_DAY} 空きが出ました",
-            f"西村屋本館 {TARGET_MONTH}/{TARGET_DAY} の状態: {label}",
+            f"{name} {month}/{day} 空きが出ました",
+            f"{name} {month}/{day} の状態: {label}",
+            BASE.format(slug=slug) + "daily#content",
         )
+    return True
+
+
+def main():
+    ok = True
+    for name, slug, y, m, d in TARGETS:
+        try:
+            ok = check(name, slug, y, m, d) and ok
+        except Exception as e:
+            print(f"[{name}] エラー: {e}")
+            ok = False
+    if not ok:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
